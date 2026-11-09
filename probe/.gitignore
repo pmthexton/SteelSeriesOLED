@@ -1,0 +1,4 @@
+*.exe
+*.jsonl
+.gocache/
+.gotmp/

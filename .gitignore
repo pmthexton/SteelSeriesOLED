@@ -1,0 +1,7 @@
+*.exe
+*.log
+.gocache/
+.gotmp/
+tools/
+dist/
+*.png
