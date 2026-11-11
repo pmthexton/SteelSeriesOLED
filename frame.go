@@ -127,21 +127,52 @@ func render(now time.Time, game string, p Perf, m Metrics) Bitmap {
 	b.Text("33", ox, oy+40, 1)
 	b.Text("MS", ox, oy+48, 1)
 	b.Text("0", ox+5, oy+56, 1)
+	previousX, previousY := -1, 0
 	for x, v := range graphColumns(p.Graph, 110) {
-		if v <= 0 {
+		if v <= 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+			previousX = -1
 			continue
 		}
-		height := int(math.Round(math.Min(v, 33) / 33 * 22))
-		if height < 1 {
-			height = 1
+		px := ox + 16 + x
+		py := oy + 61 - int(math.Round(math.Min(v, 33)/33*21))
+		if previousX >= 0 {
+			b.Line(previousX, previousY, px, py)
+		} else {
+			b.Set(px, py)
 		}
-		for y := 0; y < height; y++ {
-			b.Set(ox+16+x, oy+61-y)
-		}
+		previousX, previousY = px, py
 	}
 	return b
 }
 
+// Line draws an unfilled, one-pixel-wide connected trace (Bresenham).
+func (b *Bitmap) Line(x0, y0, x1, y1 int) {
+	dx := int(math.Abs(float64(x1 - x0)))
+	dy := -int(math.Abs(float64(y1 - y0)))
+	sx, sy := 1, 1
+	if x0 > x1 {
+		sx = -1
+	}
+	if y0 > y1 {
+		sy = -1
+	}
+	err := dx + dy
+	for {
+		b.Set(x0, y0)
+		if x0 == x1 && y0 == y1 {
+			return
+		}
+		twice := 2 * err
+		if twice >= dy {
+			err += dy
+			x0 += sx
+		}
+		if twice <= dx {
+			err += dx
+			y0 += sy
+		}
+	}
+}
 func graphColumns(input [116]float64, width int) []float64 {
 	out := make([]float64, width)
 	for i, v := range input {

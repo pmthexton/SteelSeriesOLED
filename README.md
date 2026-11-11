@@ -11,7 +11,8 @@ sensor helper, build, login startup and uninstall instructions.
 
 - Games: average FPS (latest 2 seconds), 1% low (slowest 1% of frame intervals
   in the latest 30 seconds), CPU/GPU utilization and temperatures in Celsius.
-- Scrolling 10-second frametime graph: maximum per time column to retain short
+- Scrolling 10-second frametime graph: a thin connected line, with no filled area
+  below it. Maximum per time column retains short
   stutters. Vertical range is 0–33ms; larger spikes clip at the top.
   The graph refreshes at up to 5Hz; numbers refresh every 2 seconds.
 - CPU/GPU usage and temperature sit together on the left; latency has its own

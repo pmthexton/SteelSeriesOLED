@@ -338,3 +338,71 @@ func TestInstrumentedPCLatencyPreferredWithoutMixing(t *testing.T) {
 		t.Fatalf("expired PC sample blocked fresh input: %+v", p)
 	}
 }
+
+// A steady frametime should light only the trace, not every pixel underneath it.
+func TestFrametimeGraphIsUnfilledLine(t *testing.T) {
+	p := Perf{Fresh: true, FPS: 90, Low: 80, Samples: 100}
+	for i := range p.Graph {
+		p.Graph[i] = 11
+	}
+	b := render(time.Unix(0, 0), "game.exe", p, missingMetrics())
+	lit := 0
+	for x := 16; x < 126; x++ {
+		for y := 40; y <= 61; y++ {
+			if b[y*128+x] {
+				lit++
+				if y != 54 {
+					t.Fatalf("filled pixel below/above steady trace at %d,%d", x, y)
+				}
+			}
+		}
+	}
+	if lit != 110 {
+		t.Fatalf("steady line has %d pixels, want 110", lit)
+	}
+}
+
+func TestFrametimeLineRetainsSpikesAndLeavesGaps(t *testing.T) {
+	p := Perf{Fresh: true}
+	p.Graph[0] = 11
+	p.Graph[58] = 330 // clipped spike: input bucket 58 maps to output column 55.
+	b := render(time.Unix(0, 0), "game.exe", p, missingMetrics())
+	if !b[54*128+16] || !b[40*128+71] {
+		t.Fatal("lost steady sample or clipped spike tip")
+	}
+	if b[54*128+40] {
+		t.Fatal("line bridged a missing-data interval")
+	}
+	if b[61*128+71] {
+		t.Fatal("spike filled down to baseline")
+	}
+}
+
+func TestFrametimeLineUsesDashboardPixelShift(t *testing.T) {
+	p := Perf{Fresh: true}
+	p.Graph[0] = 11
+	a := render(time.Unix(0, 0), "game.exe", p, missingMetrics())
+	b := render(time.Unix(60, 0), "game.exe", p, missingMetrics())
+	c := render(time.Unix(180, 0), "game.exe", p, missingMetrics())
+	if !a[54*128+16] || a[54*128+17] || !b[54*128+17] || b[54*128+16] || !c[55*128+16] || c[54*128+16] {
+		t.Fatal("graph did not move with dashboard origin")
+	}
+}
+
+func TestFrametimeLineConnectsAdjacentSamples(t *testing.T) {
+	p := Perf{Fresh: true}
+	p.Graph[0] = 11
+	p.Graph[2] = 33
+	b := render(time.Unix(0, 0), "game.exe", p, missingMetrics())
+	if !b[54*128+16] || !b[40*128+17] {
+		t.Fatal("line endpoints missing")
+	}
+	for y := 40; y <= 54; y++ {
+		if !b[y*128+16] && !b[y*128+17] {
+			t.Fatalf("disconnected trace at row %d", y)
+		}
+	}
+	if b[61*128+16] || b[61*128+17] {
+		t.Fatal("connected trace filled to baseline")
+	}
+}
