@@ -9,8 +9,15 @@ sensor helper, build, login startup and uninstall instructions.
 
 ## Display
 
-- Games: average FPS (latest 2 seconds), 1% low (slowest 1% of frame intervals
-  in the latest 30 seconds), CPU/GPU utilization and temperatures in Celsius.
+- Games: average FPS (latest 2 seconds), 1% low (1000 divided by the mean slowest 1% of valid
+  display intervals in the latest 30 seconds; at least 100 samples), CPU/GPU utilization and temperatures in Celsius.
+- A smaller `BASE` line beneath FPS shows the instrumented simulation rate from
+  PresentMon's `MsBetweenSimulationStart`, averaged over the latest 2 seconds
+  for the selected swap chain. It remains `BASE --` when instrumentation is
+  unavailable or stale. This is the game's simulation cadence with frame
+  generation enabled, not a prediction of FPS with frame generation disabled.
+  Present-call counts and assumed frame-generation multipliers are never used
+  as substitutes. Display FPS, 1% low and the graph retain their display timing.
 - Scrolling 10-second frametime graph: a thin connected line, with no filled area
   below it. Maximum per time column retains short
   stutters. Vertical range is 0–33ms; larger spikes clip at the top.
@@ -31,8 +38,19 @@ sensor helper, build, login startup and uninstall instructions.
   peripheral switch/polling delay and physical panel response are not measured.
   It is not a promise to match NVIDIA overlay numbers exactly; its averaging
   window and supported instrumentation may differ.
-- FPS represents frame submissions (`MsBetweenPresents`), not a claim about
-  generated/displayed FPS. For frame-generation games these can differ.
+- FPS, 1% low and the graph use `MsBetweenDisplayChange` when the CSV schema
+  provides it. Invalid, zero and missing display intervals are excluded, without
+  substituting application timing for individual rows. This avoids paired
+  present-call artifacts with frame generation. Valid `MsUntilDisplayed` offsets
+  place samples at their display-event time.
+- Older schemas without display timing fall back to `MsBetweenPresents` for
+  all three readings and show **APP** beside the rate instead of FPS. The timing
+  source is logged at capture start. These are ETW estimates; generated frames
+  are included only where the game/driver exposes them to PresentMon. They do
+  not measure physical panel scanout or confirm DLSS activation.
+- A rolling 30-second 1% low naturally retains recent pause/alt-tab transitions
+  and real stutters until they age out. Frame count alone does not distinguish
+  gameplay from menus. The 1% low is not a percentile of instantaneous FPS.
 - When the game process exits: reset capture history and show the moving clock.
   Clock and dashboard pixels shift periodically. The clock follows the Mac app:
   21:00–07:00 is mostly black, with a 10-second sleeping-cat cameo every 5 minutes.

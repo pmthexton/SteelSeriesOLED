@@ -58,7 +58,7 @@ func run() error {
 		return e
 	}
 	if *preview != "" {
-		p := Perf{Fresh: true, FPS: 144, Low: 98, Samples: 2000, Peak: 24, Latency: 35}
+		p := Perf{Fresh: true, FPS: 144, BaseFPS: 72, Low: 98, Samples: 2000, Peak: 24, Latency: 35}
 		for i := range p.Graph {
 			p.Graph[i] = 6.5 + float64(i%5)/3
 		}
@@ -137,6 +137,7 @@ func run() error {
 	defer oled.close(true)
 	stats := newStats()
 	reportedPC := false
+	reportedBase := false
 	var game Game
 	var child *capture
 	var generation uint64
@@ -228,6 +229,7 @@ func run() error {
 			generation++
 			stats.Reset()
 			reportedPC = false
+			reportedBase = false
 			numbers = Perf{}
 			game = next
 			nextRetry = time.Time{}
@@ -263,11 +265,16 @@ func run() error {
 				child = nil
 				stats.Reset()
 				reportedPC = false
+				reportedBase = false
 				numbers = Perf{}
 				nextRetry = time.Now().Add(5 * time.Second)
 				log.Printf("Capture ended: %v", e.Err)
 			} else {
 				stats.Add(e.Frame)
+				if validInterval(e.Frame.SimulationMS) && !reportedBase {
+					log.Printf("Instrumented base frame rate active: pid=%d simulation interval=%.2fms", game.PID, e.Frame.SimulationMS)
+					reportedBase = true
+				}
 				if e.Frame.PCValid && !reportedPC {
 					log.Printf("Instrumented PC latency active: pid=%d sample=%.1fms", game.PID, e.Frame.PCLatency)
 					reportedPC = true
@@ -280,7 +287,7 @@ func run() error {
 		case <-numberTick.C:
 			numbers = stats.Snapshot(time.Now())
 			if *testProcess != "" {
-				log.Printf("Timing: received=%d frame_age=%.3fs delivery_age=%.3fs fresh=%v FPS=%.1f LAT=%sms CPU=%s%%/%sC GPU=%s%%/%sC", received, time.Since(latest).Seconds(), time.Since(arrival).Seconds(), numbers.Fresh, numbers.FPS, number(numbers.Latency), number(metrics.CPU), number(metrics.CPUTemp), number(metrics.GPU), number(metrics.GPUTemp))
+				log.Printf("Timing: received=%d frame_age=%.3fs delivery_age=%.3fs fresh=%v FPS=%.1f BASE=%s LAT=%sms CPU=%s%%/%sC GPU=%s%%/%sC", received, time.Since(latest).Seconds(), time.Since(arrival).Seconds(), numbers.Fresh, numbers.FPS, number(numbers.BaseFPS), number(numbers.Latency), number(metrics.CPU), number(metrics.CPUTemp), number(metrics.GPU), number(metrics.GPUTemp))
 			}
 		case <-controlTick.C:
 			if status, _, _ := kernel.NewProc("WaitForSingleObject").Call(uintptr(event), 0); status == 0 {
@@ -294,6 +301,7 @@ func run() error {
 			}
 			p := stats.Snapshot(now)
 			p.FPS, p.Low, p.Samples = numbers.FPS, numbers.Low, numbers.Samples
+			p.BaseFPS = numbers.BaseFPS
 			p.Latency = numbers.Latency
 			p.LatencyHeld = numbers.LatencyHeld
 			p.LatencySource = numbers.LatencySource

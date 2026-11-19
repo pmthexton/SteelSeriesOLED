@@ -61,7 +61,16 @@ func startCapture(binary string, pid uint32, generation uint64, out chan<- captu
 	go func() {
 		defer close(c.finished)
 		defer cancel()
+		reportedTiming := false
 		err := readFrames(stdout, start, pid, func(f Frame) {
+			if !reportedTiming {
+				source := "display-change intervals (FPS)"
+				if f.PresentTiming {
+					source = "application present intervals (APP fallback)"
+				}
+				log.Printf("Frame timing: %s", source)
+				reportedTiming = true
+			}
 			select {
 			case out <- captureEvent{Generation: generation, Frame: f}:
 			case <-ctx.Done():

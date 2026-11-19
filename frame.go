@@ -104,8 +104,26 @@ func render(now time.Time, game string, p Perf, m Metrics) Bitmap {
 		if p.Fresh {
 			fps = number(p.FPS)
 		}
-		b.Text(fps, ox+1, oy+1, 2)
-		b.Text("FPS", ox+49, oy+1, 1)
+		// Eleven-pixel-tall digits leave a separate seven-pixel base-rate line.
+		var digits Bitmap
+		digits.Text(fps, 0, 0, 2)
+		for y := 0; y < 11; y++ {
+			for x := 0; x < 46; x++ {
+				if digits[(y*14/11)*128+x] {
+					b.Set(ox+1+x, oy+1+y)
+				}
+			}
+		}
+		base := "--"
+		if p.Fresh && validInterval(p.BaseFPS) {
+			base = number(p.BaseFPS)
+		}
+		b.Text("BASE "+base, ox+1, oy+14, 1)
+		label := "FPS"
+		if p.PresentTiming {
+			label = "APP"
+		}
+		b.Text(label, ox+49, oy+1, 1)
 		b.Text("1% LOW", ox+79, oy+1, 1)
 		low := "--"
 		if p.Fresh && p.Samples >= 100 {

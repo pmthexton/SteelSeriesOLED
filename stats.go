@@ -15,13 +15,18 @@ type Frame struct {
 	Chain                  string
 	MS, Latency, PCLatency float64
 	PCValid                bool
+	PresentTiming          bool
 	At                     time.Time
+	SimulationMS           float64
+	SimulationAt           time.Time
 }
 type Perf struct {
 	Fresh                            bool
 	FPS, Low, FrameMS, Peak, Latency float64
+	BaseFPS                          float64
 	LatencyHeld                      bool
 	LatencySource                    string
+	PresentTiming                    bool
 	Graph                            [116]float64
 	Samples                          int
 }
@@ -30,7 +35,7 @@ type Stats struct{ chains map[string][]Frame }
 func newStats() *Stats  { return &Stats{chains: make(map[string][]Frame)} }
 func (s *Stats) Reset() { clear(s.chains) }
 func (s *Stats) Add(f Frame) {
-	if f.MS <= 0 || math.IsNaN(f.MS) || math.IsInf(f.MS, 0) {
+	if (f.MS <= 0 || math.IsNaN(f.MS) || math.IsInf(f.MS, 0)) && !validInterval(f.SimulationMS) {
 		return
 	}
 	fs := s.chains[f.Chain]
@@ -81,35 +86,47 @@ func (w latencyWindow) result(now time.Time) (value float64, held, valid bool) {
 }
 func (s *Stats) Snapshot(now time.Time) Perf {
 	var best []Frame
+	var end time.Time
 	bestCount := 0
 	for _, fs := range s.chains {
-		if len(fs) == 0 || now.Sub(fs[len(fs)-1].At) > 3*time.Second {
+		var displayEnd time.Time
+		for _, f := range fs {
+			if validInterval(f.MS) && f.At.After(displayEnd) {
+				displayEnd = f.At
+			}
+		}
+		if displayEnd.IsZero() || now.Sub(displayEnd) > 3*time.Second {
 			continue
 		}
-		end := fs[len(fs)-1].At
 		count := 0
 		for _, f := range fs {
-			if !f.At.Before(end.Add(-2*time.Second)) && !f.At.After(end) {
+			if validInterval(f.MS) && !f.At.Before(displayEnd.Add(-2*time.Second)) && !f.At.After(displayEnd) {
 				count++
 			}
 		}
 		if count > bestCount {
 			best, bestCount = fs, count
+			end = displayEnd
 		}
 	}
-	p := Perf{Latency: math.NaN()}
-	if len(best) == 0 || now.Sub(best[len(best)-1].At) > 3*time.Second {
+	p := Perf{Latency: math.NaN(), BaseFPS: math.NaN()}
+	if len(best) == 0 {
 		return p
 	}
 	p.Fresh = true
-	end := best[len(best)-1].At
+	p.PresentTiming = best[len(best)-1].PresentTiming
 	var times []float64
 	sum := 0.0
 	count := 0
+	simulationSum, simulationCount := 0.0, 0
 	var input, pc latencyWindow
 	for _, f := range best {
+		if age := end.Sub(f.SimulationAt); validInterval(f.SimulationMS) && age >= 0 && age <= 2*time.Second {
+			simulationSum += f.SimulationMS
+			simulationCount++
+		}
 		age := end.Sub(f.At)
-		if age < 0 || age > 30*time.Second {
+		if age < 0 || age > 30*time.Second || !validInterval(f.MS) {
 			continue
 		}
 		times = append(times, f.MS)
@@ -135,6 +152,9 @@ func (s *Stats) Snapshot(now time.Time) Perf {
 		p.FPS = 1000 * float64(count) / sum
 		p.FrameMS = sum / float64(count)
 	}
+	if simulationCount > 0 {
+		p.BaseFPS = 1000 * float64(simulationCount) / simulationSum
+	}
 	if value, held, ok := pc.result(now); ok {
 		p.Latency, p.LatencyHeld, p.LatencySource = value, held, "pc"
 	} else if value, held, ok := input.result(now); ok {
@@ -153,6 +173,10 @@ func (s *Stats) Snapshot(now time.Time) Perf {
 	return p
 }
 
+func validInterval(v float64) bool {
+	return v > 0 && !math.IsNaN(v) && !math.IsInf(v, 0)
+}
+
 func readFrames(r io.Reader, start time.Time, pid uint32, emit func(Frame)) error {
 	reader := csv.NewReader(r)
 	reader.FieldsPerRecord = -1
@@ -164,9 +188,18 @@ func readFrames(r io.Reader, start time.Time, pid uint32, emit func(Frame)) erro
 	for i, h := range header {
 		fields[strings.TrimPrefix(strings.TrimSpace(h), "\ufeff")] = i
 	}
-	for _, name := range []string{"ProcessID", "SwapChainAddress", "MsBetweenPresents"} {
+	for _, name := range []string{"ProcessID", "SwapChainAddress"} {
 		if _, ok := fields[name]; !ok {
 			return fmt.Errorf("PresentMon CSV missing %s", name)
+		}
+	}
+	// Select one timing source per stream; never mix present and display intervals.
+	timingKey := "MsBetweenDisplayChange"
+	_, displayTiming := fields[timingKey]
+	if !displayTiming {
+		timingKey = "MsBetweenPresents"
+		if _, ok := fields[timingKey]; !ok {
+			return fmt.Errorf("PresentMon CSV missing display and present timing")
 		}
 	}
 	timeKey := "TimeInMs"
@@ -195,13 +228,27 @@ func readFrames(r io.Reader, start time.Time, pid uint32, emit func(Frame)) erro
 		if e != nil || (pid != 0 && uint32(got) != pid) {
 			continue
 		}
-		ms, e := strconv.ParseFloat(get("MsBetweenPresents"), 64)
+		ms, e := strconv.ParseFloat(get(timingKey), 64)
 		if e != nil || ms <= 0 || math.IsNaN(ms) || math.IsInf(ms, 0) {
+			ms = 0
+		}
+		simulation, _ := strconv.ParseFloat(get("MsBetweenSimulationStart"), 64)
+		if !validInterval(simulation) {
+			simulation = 0
+		}
+		if ms == 0 && simulation == 0 {
 			continue
 		}
 		ts, e := strconv.ParseFloat(get(timeKey), 64)
 		if e != nil || math.IsNaN(ts) || math.IsInf(ts, 0) || ts < 0 || ts > 1e12 {
 			continue
+		}
+		simulationAt := start.Add(time.Duration(ts * float64(time.Millisecond)))
+		if displayTiming {
+			// Place display intervals at their display event when the offset is known.
+			if offset, err := strconv.ParseFloat(get("MsUntilDisplayed"), 64); err == nil && offset >= 0 && offset <= 1e12 && !math.IsNaN(offset) && !math.IsInf(offset, 0) {
+				ts += offset
+			}
 		}
 		chain := get("SwapChainAddress")
 		if pid == 0 {
@@ -218,6 +265,6 @@ func readFrames(r io.Reader, start time.Time, pid uint32, emit func(Frame)) erro
 		if v, e := strconv.ParseFloat(get("MsPCLatency"), 64); e == nil && v >= 0 && !math.IsNaN(v) && !math.IsInf(v, 0) {
 			pc, pcValid = v, true
 		}
-		emit(Frame{Chain: chain, MS: ms, Latency: latency, PCLatency: pc, PCValid: pcValid, At: start.Add(time.Duration(ts * float64(time.Millisecond)))})
+		emit(Frame{Chain: chain, MS: ms, Latency: latency, PCLatency: pc, PCValid: pcValid, PresentTiming: !displayTiming, At: start.Add(time.Duration(ts * float64(time.Millisecond))), SimulationMS: simulation, SimulationAt: simulationAt})
 	}
 }
